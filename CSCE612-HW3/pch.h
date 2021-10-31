@@ -7,7 +7,9 @@
 #ifndef PCH_H
 #define PCH_H
 
+#include <iostream>
 #include <Windows.h>
+#include <algorithm>
 
 // add headers that you want to pre-compile here
 #include "SenderSocket.h"
