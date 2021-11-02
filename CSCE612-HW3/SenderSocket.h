@@ -77,18 +77,28 @@ class SenderSocket
 {
 public:
 	SOCKET sock;       // socket handle
-	DWORD host_ip;
+	
+	const char* host;
+	int port;
+	in_addr hostAddr;
+
+	double rto;		  // retransmit timeout
+
+	clock_t startAt;  // timer when the constructor was called
+	bool isOpen;      // SenderSocket is open
+
 
 	SenderSocket();
 	~SenderSocket();
 	int Open(const char* targetHost, int port, int senderWindow, LinkProperties* lp);
-	int Send(const char* targetHost, int port, char* buf, int size);
-	int Close(const char* targetHost, int port);
+	int Send(char* buf, int size);
+	int Close();
 
 private:
-	int send(DWORD ip, int port, const char* msg, int msgLen);
-	int recv(DWORD ip, int port, int timeout, ReceiverHeader* rh);
+	int send(const char* msg, int msgLen);
+	int recv(long timeout_sec, long timeout_usec, ReceiverHeader* rh);
+	int dnsLookup(const char* host);
 };
 
-
-int getIP(const char* host, DWORD* IP);
+bool isSYNACK(Flags flags);
+bool isFINACK(Flags flags);

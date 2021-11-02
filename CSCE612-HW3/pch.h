@@ -10,6 +10,7 @@
 #include <iostream>
 #include <Windows.h>
 #include <algorithm>
+#include <ctime>
 
 // add headers that you want to pre-compile here
 #include "SenderSocket.h"

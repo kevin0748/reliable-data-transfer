@@ -4,49 +4,77 @@
 #include "pch.h"
 #pragma comment(lib, "Ws2_32.lib")
 
-int main()
+int main(int argc, char *argv[])
 {
-    std::cout << "Hello World!\n";
+    if (argc != 8) {
+        printf("[Usage] rdt.exe $host $buffer_size $sender_window $rtt $forward_loss_rate $return_loss_rate $speed \n");
+        return -1;
+    }
 
-    const char* targetHost = "s3.irl.cs.tamu.edu";
-    int power = 10;
-    int senderWindow = 50000;
+    char* targetHost = argv[1];
+    int power = atoi(argv[2]);
+    int senderWindow = atoi(argv[3]);
+    float rtt = atof(argv[4]);
+    float forward_loss_rate = atof(argv[5]);
+    float return_loss_rate = atof(argv[6]);
+    float speed = atof(argv[7]);
 
+    printf("Main:\tsender W = %d, RTT %.3f sec, loss %g / %g, link %1.f Mbps\n",
+        senderWindow, rtt, forward_loss_rate, return_loss_rate, speed);
+
+    clock_t bufferInitTimer = clock();
     UINT64 dwordBufSize = (UINT64)1 << power;
     DWORD* dwordBuf = new DWORD[dwordBufSize];  // user-requested buffer
     for (UINT64 i = 0; i < dwordBufSize; i++) { // required initialization
         dwordBuf[i] = i;
     }
 
+    bufferInitTimer = clock() - bufferInitTimer;
+    printf("Main:\tinitializing DWORD array with 2^%d elements... done in %d ms\n",
+        power, bufferInitTimer);
+
     SenderSocket ss;
     int status;
 
+    clock_t senderSocketTimer = clock();
     LinkProperties lp;
-    lp.RTT = 0.2;
-    lp.speed = 1e6 * 1000.2;
-    lp.pLoss[FORWARD_PATH] = 0.00001;
-    lp.pLoss[RETURN_PATH] = 0.0001;
+    lp.RTT = rtt;
+    lp.speed = 1e6 * speed;
+    lp.pLoss[FORWARD_PATH] = forward_loss_rate;
+    lp.pLoss[RETURN_PATH] = return_loss_rate;
     if ((status = ss.Open(targetHost, MAGIC_PORT, senderWindow, &lp)) != STATUS_OK) {
-        // error handling: print status and quit
+        printf("Main:\tconnected failed with status %d\n", status);
+        return -1;
     }
 
     char* charBuf = (char*)dwordBuf;  // this buffer goes into socket
     UINT64 byteBufferSize = dwordBufSize << 2; // convert to bytes
+
+    clock_t socketOpenAt = clock();
+    printf("Main:\tconnected to %s in %.3f sec, pkt size %d bytes\n",
+        targetHost, (double)(socketOpenAt - senderSocketTimer) / (double)CLOCKS_PER_SEC, MAX_PKT_SIZE);
+
 
     UINT64 off = 0;
     while (off < byteBufferSize) {
         // decide the size of next chunk
         int bytes = min(byteBufferSize - off, MAX_PKT_SIZE - sizeof(SenderDataHeader));
         // send chunk into socket
-        if ((status = ss.Send(targetHost, MAGIC_PORT, charBuf + off, bytes)) != STATUS_OK) {
-            // return -1;
+        if ((status = ss.Send(charBuf + off, bytes)) != STATUS_OK) {
+            // error handling: print status and quit
         }
         off += bytes;
     }
+    clock_t transferFinishedAt = clock();
 
-    if ((status = ss.Close(targetHost, MAGIC_PORT)) != STATUS_OK) {
-        // error handling: print status and quit
+    if ((status = ss.Close()) != STATUS_OK) {
+        printf("Main:\tconnected failed with status %d\n", status);
+        return -1;
     }
+
+
+    printf("Main:\ttransfer finished in %.3f sec\n", 
+        (double)(transferFinishedAt - socketOpenAt) / (double)CLOCKS_PER_SEC, MAX_PKT_SIZE);
 }
 
 // Run program: Ctrl + F5 or Debug > Start Without Debugging menu
