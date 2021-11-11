@@ -82,11 +82,12 @@ public:
 	int port;
 	in_addr hostAddr;
 
-	double rto;		  // retransmit timeout
-
 	clock_t startAt;  // timer when the constructor was called
-	bool isOpen;      // SenderSocket is open
 
+	int pktSeq;       // current sending packet sequence #
+
+	double rto;		  // retransmit timeout
+	bool isOpen;      // SenderSocket is open
 
 	SenderSocket();
 	~SenderSocket();

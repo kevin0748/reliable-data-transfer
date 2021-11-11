@@ -35,6 +35,9 @@ SenderSocket::SenderSocket()
         return;
     }
 
+    // Initial sending sequence
+    pktSeq = 0;
+
     // create this buffer once, then possibly reuse for multiple connections in Part 3
     //buf = (char*)malloc(MAX_PKT_SIZE + 1);
     //allocatedSize = MAX_PKT_SIZE + 1;
@@ -61,7 +64,7 @@ int SenderSocket::Open(const char* _targetHost, int _port, int senderWindow, Lin
     lp->bufferSize = senderWindow + MAX_SYN_ATTEMPTS;
 
     SenderDataHeader sdh;
-    sdh.seq = 0;
+    sdh.seq = pktSeq;
     sdh.flags.SYN = 1;
 
     SenderSynHeader ssh;
@@ -123,25 +126,19 @@ int SenderSocket::Open(const char* _targetHost, int _port, int senderWindow, Lin
 }
 
 int SenderSocket::Send(char* buf, int bufSize) {
-    return 0;
-
     if (!isOpen) {
         return NOT_CONNECTED;
     }
 
-    // TODO: skip for hw1
-
     SenderDataHeader sdh;
-    int pkt_seq = 0;
-    sdh.seq = pkt_seq;
-
-    int ret;
+    sdh.seq = pktSeq;
 
     int sendBufSize = sizeof(sdh) + bufSize;
     char* sendBuf = new char[sendBufSize];
     memcpy(sendBuf, (char*)&sdh, sizeof(sdh));
     memcpy(sendBuf + sizeof(sdh), buf, bufSize);
 
+    int ret;
     ret = send(sendBuf, sendBufSize);
     if (ret != STATUS_OK) {
         return ret;
@@ -155,12 +152,12 @@ int SenderSocket::Send(char* buf, int bufSize) {
     }
 
     printf("--------------\n");
-    printf("seq: %d\n", pkt_seq);
+    printf("seq: %d\n", sdh.seq);
     printf("flags: %x\n", rh.flags);
     printf("recvWindow: %lu\n", rh.recvWnd);
     printf("ackSeq: %lu\n", rh.ackSeq);
     
-    pkt_seq = rh.ackSeq;
+    pktSeq = rh.ackSeq;
     return STATUS_OK;
 }
 
@@ -170,7 +167,7 @@ int SenderSocket::Close() {
     }
 
     SenderDataHeader sdh;
-    sdh.seq = 0;
+    sdh.seq = pktSeq;
     sdh.flags.FIN = 1;
 
     int ret;
@@ -203,7 +200,7 @@ int SenderSocket::Close() {
             }
 
             timer = clock() - startAt;
-            printf("FIN-ACK %d window %d\n",
+            printf("FIN-ACK %d window %0X\n",
                 rh.ackSeq, rh.recvWnd);
             return STATUS_OK;
         }

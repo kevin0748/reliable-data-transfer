@@ -14,5 +14,6 @@
 
 // add headers that you want to pre-compile here
 #include "SenderSocket.h"
+#include "Checksum.h"
 
 #endif //PCH_H

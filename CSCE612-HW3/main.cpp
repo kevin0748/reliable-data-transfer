@@ -72,9 +72,15 @@ int main(int argc, char *argv[])
         return -1;
     }
 
+    Checksum cs;
+    DWORD check = cs.CRC32((unsigned char*)charBuf, byteBufferSize);
 
+    // TODO: fix the timer
     printf("Main:\ttransfer finished in %.3f sec\n", 
         (double)(transferFinishedAt - socketOpenAt) / (double)CLOCKS_PER_SEC, MAX_PKT_SIZE);
+    printf("Main:\tchecksum %0X\n", check);
+
+    printf("Main:\testRTT ...........\n");
 }
 
 // Run program: Ctrl + F5 or Debug > Start Without Debugging menu
