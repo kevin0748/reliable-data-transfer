@@ -7,8 +7,11 @@
 #ifndef PCH_H
 #define PCH_H
 
+#pragma comment(lib, "Ws2_32.lib")
+#define _WINSOCK_DEPRECATED_NO_WARNINGS
+
 #include <iostream>
-#include <Windows.h>
+#include <winsock2.h>
 #include <algorithm>
 #include <ctime>
 

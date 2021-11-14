@@ -2,7 +2,6 @@
 //
 
 #include "pch.h"
-#pragma comment(lib, "Ws2_32.lib")
 
 int main(int argc, char *argv[])
 {
@@ -54,7 +53,6 @@ int main(int argc, char *argv[])
     printf("Main:\tconnected to %s in %.3f sec, pkt size %d bytes\n",
         targetHost, (double)(socketOpenAt - senderSocketTimer) / (double)CLOCKS_PER_SEC, MAX_PKT_SIZE);
 
-
     UINT64 off = 0;
     while (off < byteBufferSize) {
         // decide the size of next chunk
@@ -65,6 +63,12 @@ int main(int argc, char *argv[])
         }
         off += bytes;
     }
+
+    EnterCriticalSection(&ss.queueMutex);
+    ss.sentDone = true;
+    LeaveCriticalSection(&ss.queueMutex);
+    
+
     clock_t transferFinishedAt = clock();
 
     if ((status = ss.Close()) != STATUS_OK) {
