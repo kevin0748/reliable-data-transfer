@@ -13,6 +13,8 @@
 #define FAILED_SEND 4 // sendto() failed in kernel
 #define TIMEOUT 5 // timeout after all retx attempts are exhausted
 #define FAILED_RECV 6 // recvfrom() failed in kernel
+#define FAILED_THREAD 7 // failed when creating thread
+#define FAILED_INTERNAL_HANDLE 8
 
 #define FORWARD_PATH 0
 #define RETURN_PATH 1
@@ -29,6 +31,10 @@ public:
 	DWORD magic : 24;
 
 	Flags() {
+		init();
+	}
+
+	void init() {
 		memset(this, 0, sizeof(*this)); magic = MAGIC_PROTOCOL;
 	}
 };
@@ -73,6 +79,21 @@ public:
 };
 #pragma pack(pop)  // restores old packing
 
+#define PKT_TYPE_SYN 1
+#define PKT_TYPE_FIN 2
+#define PKT_TYPE_DATA 3
+
+class Packet {
+public:
+	int type;                // SYN, FIN, data
+	int size;                // for the worker thread, bytes in pakcet data
+	clock_t txTime;          // transmission time
+	char pkt[MAX_PKT_SIZE];  // packet with header
+};
+
+#define ALPHA 0.125
+#define BETA 0.25
+
 class SenderSocket
 {
 public:
@@ -81,11 +102,38 @@ public:
 	const char* host;
 	int port;
 	in_addr hostAddr;
+	DWORD W;            // window size
 
+
+	clock_t objStartAt;  // timer when the constructor was called
+	clock_t sendFirstPktAt;
+	clock_t recvLastAckAt;
+
+	Packet *pending_pkts; // buffer for packets
+	int nextSeq;      // next sending packet sequence #
+	int nextToSend;   // next packets to send out
+	int senderBase;   // buffer sending base
+	int lastReleased;
+	int newReleased;
+	DWORD effectiveWin;
+	int retxCnt;
+	int timeoutCnt;
+
+	double estRTT;
+	double devRTT;
 	double rto;		  // retransmit timeout
-
-	clock_t startAt;  // timer when the constructor was called
 	bool isOpen;      // SenderSocket is open
+
+
+	HANDLE empty, full;          // producer consumer semaphore
+	HANDLE eventQuit;            // time to close SenderSocket
+	HANDLE socketReceiveReady;   // socket event     
+	
+	CRITICAL_SECTION queueMutex; // protected queueSize, sentDone
+	LONG volatile queueSize;     
+	bool sentDone;               // set when appending all packets into buffer
+
+	HANDLE workerThread, statsThread;
 
 
 	SenderSocket();
@@ -94,11 +142,15 @@ public:
 	int Send(char* buf, int size);
 	int Close();
 
+	void WorkerRun();
+	void Stats();
+
 private:
 	int send(const char* msg, int msgLen);
 	int recv(long timeout_sec, long timeout_usec, ReceiverHeader* rh);
 	int dnsLookup(const char* host);
 };
 
+bool isACK(Flags flags);
 bool isSYNACK(Flags flags);
 bool isFINACK(Flags flags);
