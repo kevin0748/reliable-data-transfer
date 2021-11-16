@@ -265,6 +265,11 @@ void SenderSocket::WorkerRun() {
             LeaveCriticalSection(&queueMutex);
             if (finished) break;
 
+            if (retxCnt > MAX_ATTEMPTS) {
+                finished = true;
+                break;
+            }
+
             // retransmit
             ret2 = send(pending_pkts[senderBase % W].pkt, pending_pkts[senderBase % W].size);
             if (ret2 != STATUS_OK) {
@@ -372,7 +377,7 @@ int SenderSocket::Send(char* buf, int bufSize) {
     int ret = WaitForMultipleObjects(2, events, false, INFINITE);
     switch (ret) {
     case WAIT_OBJECT_0: // eventQuit
-        printf("eventQuit\n");
+        // printf("eventQuit\n");
         break;
 
     case WAIT_OBJECT_0 + 1: // empty
