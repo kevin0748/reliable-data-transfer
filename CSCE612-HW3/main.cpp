@@ -67,24 +67,24 @@ int main(int argc, char *argv[])
     EnterCriticalSection(&ss.queueMutex);
     ss.sentDone = true;
     LeaveCriticalSection(&ss.queueMutex);
-    
-
-    clock_t transferFinishedAt = clock();
 
     if ((status = ss.Close()) != STATUS_OK) {
         printf("Main:\tconnected failed with status %d\n", status);
         return -1;
     }
 
+    double elapsedTime = (double)(ss.recvLastAckAt - ss.sendFirstPktAt)/ (double)CLOCKS_PER_SEC ;
+
     Checksum cs;
     DWORD check = cs.CRC32((unsigned char*)charBuf, byteBufferSize);
 
     // TODO: fix the timer
-    printf("Main:\ttransfer finished in %.3f sec\n", 
-        (double)(transferFinishedAt - socketOpenAt) / (double)CLOCKS_PER_SEC, MAX_PKT_SIZE);
-    printf("Main:\tchecksum %0X\n", check);
-
-    printf("Main:\testRTT ...........\n");
+    printf("Main:\ttransfer finished in %.3f sec, %.2f Kbps, checksum %0X\n", 
+        elapsedTime,
+        (double)byteBufferSize * 8/elapsedTime/1000,
+        check
+    );
+    printf("Main:\testRTT %.3f, ideal rate %.2f Kbps\n",ss.estRTT, (double)senderWindow * 8 * (MAX_PKT_SIZE - sizeof(SenderDataHeader))/ ss.estRTT / 1000);
 }
 
 // Run program: Ctrl + F5 or Debug > Start Without Debugging menu

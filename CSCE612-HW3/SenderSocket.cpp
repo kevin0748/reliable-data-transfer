@@ -3,7 +3,7 @@
 
 SenderSocket::SenderSocket()
 {
-    startAt = clock();
+    objStartAt = clock();
 
     WSADATA wsaData;
 
@@ -46,6 +46,7 @@ SenderSocket::~SenderSocket() {
     CloseHandle(eventQuit);
     CloseHandle(socketReceiveReady);
     CloseHandle(workerThread);
+    CloseHandle(statsThread);
 
     DeleteCriticalSection(&queueMutex);
 
@@ -61,7 +62,25 @@ SenderSocket::~SenderSocket() {
 
 DWORD WINAPI threadWorkerRun(LPVOID pParam) {
     SenderSocket* ss = ((SenderSocket*)pParam);
+
+    int kernelBuffer = 20e6; // 20meg
+    if (setsockopt(ss->sock, SOL_SOCKET, SO_RCVBUF, (char*)&kernelBuffer, sizeof(int)) == SOCKET_ERROR)
+        printf("failed to setsockopt (%d)\n", WSAGetLastError());
+
+    kernelBuffer = 20e6; // 20meg
+    if (setsockopt(ss->sock, SOL_SOCKET, SO_SNDBUF, (char*)&kernelBuffer, sizeof(int)) == SOCKET_ERROR)
+        printf("failed to setsockopt (%d)\n", WSAGetLastError());
+
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
+
+
     ss->WorkerRun();
+    return 0;
+}
+
+DWORD WINAPI threadStats(LPVOID pParam) {
+    SenderSocket* ss = ((SenderSocket*)pParam);
+    ss->Stats();
     return 0;
 }
 
@@ -80,6 +99,10 @@ int SenderSocket::Open(const char* _targetHost, int _port, int senderWindow, Lin
     senderBase = 0;
     newReleased = 0;
     lastReleased = 0;
+    estRTT = 0;
+    devRTT = 0;
+    retxCnt = 0;
+    timeoutCnt = 0;
 
     // Initial semaphore
     empty = CreateSemaphore(NULL, 0, W, NULL);
@@ -128,10 +151,10 @@ int SenderSocket::Open(const char* _targetHost, int _port, int senderWindow, Lin
         return ret;
     }
 
-    rto = 1;
+    rto = max(1, 2*lp->RTT);
     int attempts = 0;
     while (attempts++ < MAX_SYN_ATTEMPTS) {
-        clock_t pktSendAt = clock() - startAt;
+        clock_t pktSendAt = clock() - objStartAt;
         //printf(" [ %.3f] --> ", (double)pktSendAt / (double)CLOCKS_PER_SEC);
         
         ret = send((char*)&ssh, sizeof(ssh));
@@ -150,7 +173,7 @@ int SenderSocket::Open(const char* _targetHost, int _port, int senderWindow, Lin
             continue;
         }
         clock_t pktRecvAt;
-        pktRecvAt = clock() - startAt;
+        pktRecvAt = clock() - objStartAt;
         //printf(" [ %.3f] <-- ", (double)pktRecvAt / (double)CLOCKS_PER_SEC);
 
         if (ret == STATUS_OK) {
@@ -167,6 +190,13 @@ int SenderSocket::Open(const char* _targetHost, int _port, int senderWindow, Lin
             if (!ReleaseSemaphore(empty, lastReleased, NULL)) {
                 printf("ReleaseSemaphore 'empty' error\n");
                 return FAILED_INTERNAL_HANDLE;
+            }
+
+            // start workstatser thread
+            statsThread = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)threadStats, this, 0, NULL);
+            if (statsThread == NULL) {
+                printf("failed to create stats thread\n");
+                return FAILED_THREAD;
             }
 
             // start worker thread
@@ -187,6 +217,29 @@ int SenderSocket::Open(const char* _targetHost, int _port, int senderWindow, Lin
     return TIMEOUT;
 }
 
+void SenderSocket::Stats() {
+    clock_t startAt = clock();
+    clock_t cur, prev = startAt;
+    int prevBase = 0;
+
+    while (WaitForSingleObject(eventQuit, 2000) == WAIT_TIMEOUT) {
+        cur = clock();
+        printf("[%3d] B %7d (%3.1f MB) N %7d T %2d F %2d W %4d S %2.3f Mbps RTT %.3f\n",
+                (cur-startAt)/CLOCKS_PER_SEC,
+                senderBase,
+                (double)senderBase * (MAX_PKT_SIZE - sizeof(SenderDataHeader)) / 1e6,
+                nextToSend, // n
+                timeoutCnt, // T
+                0, //F
+                effectiveWin, // W
+                (double)(senderBase-prevBase) * 8 * (MAX_PKT_SIZE - sizeof(SenderDataHeader)) / 1e6 / ((cur-prev)/CLOCKS_PER_SEC), // Speed
+                estRTT
+                );
+
+        prevBase = senderBase;
+        prev = cur;
+    }
+}
 
 void SenderSocket::WorkerRun() {
     if (WSAEventSelect(sock, socketReceiveReady, FD_READ) == SOCKET_ERROR) {
@@ -198,42 +251,75 @@ void SenderSocket::WorkerRun() {
 
     HANDLE events[] = { socketReceiveReady, full};
     while (!finished) {
-        //TODO:
-        //if (pending packets)
-        //else
-        long timeout = INFINITE;
-        timeout = 1000;
-
+        long timeout = rto * 1000;
+        DWORD y;
         int ret, ret2;
         ReceiverHeader rh;
         ret = WaitForMultipleObjects(2, events, false, timeout);
         switch (ret)
         {
         case WAIT_TIMEOUT:
-            printf("timeout\n");
+           // printf("timeout\n");
             EnterCriticalSection(&queueMutex);
             finished = sentDone && (queueSize == 0);
             LeaveCriticalSection(&queueMutex);
-            //ret2 = send(pending_pkts[senderBase % W].pkt, pending_pkts[senderBase % W].size);
+            if (finished) break;
+
+            // retransmit
+            ret2 = send(pending_pkts[senderBase % W].pkt, pending_pkts[senderBase % W].size);
+            if (ret2 != STATUS_OK) {
+                printf("Failed to send (%d)\n", ret2);
+                return;
+            }
+            retxCnt++;
+            timeoutCnt++;
+           
+
+            pending_pkts[senderBase % W].txTime = clock();
             break;
 
         case WAIT_OBJECT_0: // socket
             ret2 = recv(floor(rto), (rto - floor(rto)) * 1e6, &rh);
+            if (ret2 != STATUS_OK) {
+                if (ret2 == TIMEOUT) continue;
+                else return;
+            }
             if (!isACK(rh.flags)) {
                 continue;
             }
+
+            recvLastAckAt = clock();
+
+            /*
             printf("--------------\n");
             printf("flags: %x\n", rh.flags);
             printf("recvWindow: %lu\n", rh.recvWnd);
             printf("ackSeq: %lu\n", rh.ackSeq);
-            if (rh.ackSeq > senderBase) {
+            */
+            y = rh.ackSeq;
+            if (y > senderBase) {
                 EnterCriticalSection(&queueMutex);
-                queueSize = queueSize - (rh.ackSeq - senderBase);
+                queueSize = queueSize - (y - senderBase);
                 finished = sentDone && (queueSize == 0);
                 LeaveCriticalSection(&queueMutex);
 
+                if (retxCnt == 0) {
+                    double sampleRTT = (clock() - pending_pkts[(y - 1) % W].txTime) / (double)CLOCKS_PER_SEC;
+                    if (estRTT == 0) {
+                        estRTT = sampleRTT;
+                        devRTT = 0;
+                    }
+                    else {
+                        estRTT = (1 - ALPHA) * estRTT + ALPHA * sampleRTT;
+                        devRTT = (1 - BETA) * devRTT + BETA * abs(sampleRTT - estRTT);
+                    }
+
+                    rto = estRTT + 4 * max(devRTT, 0.010);
+                }
+                retxCnt = 0;     
+
                 senderBase = rh.ackSeq;
-                DWORD effectiveWin = min(W, rh.recvWnd);
+                effectiveWin = min(W, rh.recvWnd);
                 
                 newReleased = senderBase + effectiveWin - lastReleased;
                 if (!ReleaseSemaphore(empty, newReleased, NULL)) {
@@ -245,17 +331,24 @@ void SenderSocket::WorkerRun() {
 
         case WAIT_OBJECT_0 + 1: // sender
             ret2 = send(pending_pkts[nextToSend % W].pkt, pending_pkts[nextToSend % W].size);
+            if (ret2 != STATUS_OK) {
+                printf("Failed to send (%d)\n", ret2);
+                return;
+            }
+
+            if (nextToSend == 0) {
+                sendFirstPktAt = clock();
+            }
+
+            pending_pkts[nextToSend % W].txTime = clock();
             nextToSend++;
-            printf("[Worker Run] Send %d\n", nextToSend-1);
+            //printf("[Worker Run] Send %d\n", nextToSend-1);
             break;
 
         default:
             printf("[Worker Run] Failed wait\n");
             return;
         }
-
-        // TODO: recompute timerExpire
-        
     }
 
     if (!SetEvent(eventQuit)) {
@@ -296,7 +389,7 @@ int SenderSocket::Send(char* buf, int bufSize) {
 
         memcpy(sdh + 1, buf, bufSize);
         nextSeq++;
-        printf("[Send] fill buffer at %d\n", nextSeq - 1);
+        //printf("[Send] fill buffer at %d\n", nextSeq - 1);
 
         EnterCriticalSection(&queueMutex);
         queueSize += 1;
@@ -320,7 +413,7 @@ int SenderSocket::Close() {
     DWORD waitResult = WaitForSingleObject(eventQuit, INFINITE);
     switch (waitResult) {
     case WAIT_OBJECT_0:
-        printf("recv eventQuit. Start sending FIN\n");
+       // printf("recv eventQuit. Start sending FIN\n");
         break;
     default:
         printf("wait error\n");
@@ -352,15 +445,15 @@ int SenderSocket::Close() {
         if (ret == TIMEOUT) {
             continue;
         }
-        timer = clock() - startAt;
-        printf(" [ %.3f] <-- ", (double)timer / (double)CLOCKS_PER_SEC);
+        timer = clock() - objStartAt;
+        printf("[ %.3f] <-- ", (double)timer / (double)CLOCKS_PER_SEC);
 
         if (ret == STATUS_OK) {
             if (!isFINACK(rh.flags)) {
                 continue;
             }
 
-            timer = clock() - startAt;
+            timer = clock() - objStartAt;
             printf("FIN-ACK %d window %0X\n",
                 rh.ackSeq, rh.recvWnd);
             return STATUS_OK;

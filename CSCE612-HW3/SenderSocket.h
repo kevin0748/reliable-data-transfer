@@ -91,6 +91,9 @@ public:
 	char pkt[MAX_PKT_SIZE];  // packet with header
 };
 
+#define ALPHA 0.125
+#define BETA 0.25
+
 class SenderSocket
 {
 public:
@@ -102,7 +105,9 @@ public:
 	DWORD W;            // window size
 
 
-	clock_t startAt;  // timer when the constructor was called
+	clock_t objStartAt;  // timer when the constructor was called
+	clock_t sendFirstPktAt;
+	clock_t recvLastAckAt;
 
 	Packet *pending_pkts; // buffer for packets
 	int nextSeq;      // next sending packet sequence #
@@ -110,7 +115,12 @@ public:
 	int senderBase;   // buffer sending base
 	int lastReleased;
 	int newReleased;
+	DWORD effectiveWin;
+	int retxCnt;
+	int timeoutCnt;
 
+	double estRTT;
+	double devRTT;
 	double rto;		  // retransmit timeout
 	bool isOpen;      // SenderSocket is open
 
@@ -123,7 +133,7 @@ public:
 	LONG volatile queueSize;     
 	bool sentDone;               // set when appending all packets into buffer
 
-	HANDLE workerThread;
+	HANDLE workerThread, statsThread;
 
 
 	SenderSocket();
@@ -133,6 +143,7 @@ public:
 	int Close();
 
 	void WorkerRun();
+	void Stats();
 
 private:
 	int send(const char* msg, int msgLen);
