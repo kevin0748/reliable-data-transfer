@@ -263,18 +263,19 @@ void SenderSocket::WorkerRun() {
             EnterCriticalSection(&queueMutex);
             finished = sentDone && (queueSize == 0);
             LeaveCriticalSection(&queueMutex);
-            if (finished) break;
+            if (finished) continue;
 
             if (retxCnt > MAX_ATTEMPTS) {
                 finished = true;
-                break;
+                continue;
             }
 
             // retransmit
             ret2 = send(pending_pkts[senderBase % W].pkt, pending_pkts[senderBase % W].size);
             if (ret2 != STATUS_OK) {
                 printf("Failed to send (%d)\n", ret2);
-                return;
+                finished = true;
+                continue;
             }
             retxCnt++;
             timeoutCnt++;
@@ -284,11 +285,12 @@ void SenderSocket::WorkerRun() {
             break;
 
         case WAIT_OBJECT_0: // socket
-            ret2 = recv(floor(rto), (rto - floor(rto)) * 1e6, &rh);
+            ret2 = recvWOTimeout(&rh);
             if (ret2 != STATUS_OK) {
-                if (ret2 == TIMEOUT) continue;
-                else return;
+                finished = true;
+                continue;
             }
+
             if (!isACK(rh.flags)) {
                 continue;
             }
@@ -338,7 +340,8 @@ void SenderSocket::WorkerRun() {
             ret2 = send(pending_pkts[nextToSend % W].pkt, pending_pkts[nextToSend % W].size);
             if (ret2 != STATUS_OK) {
                 printf("Failed to send (%d)\n", ret2);
-                return;
+                finished = true;
+                continue;
             }
 
             if (nextToSend == 0) {
@@ -502,6 +505,28 @@ int SenderSocket::send(const char* msg, int msgLen) {
     remote.sin_port = htons(port);
     if (sendto(sock, msg, msgLen, 0, (struct sockaddr*)&remote, sizeof(remote)) == SOCKET_ERROR) {
         return FAILED_SEND;
+    }
+
+    return STATUS_OK;
+}
+
+int SenderSocket::recvWOTimeout(ReceiverHeader* rh) {
+    struct sockaddr_in respAddr;
+    memset(&respAddr, 0, sizeof(respAddr));
+    int resplen = sizeof(respAddr);
+
+    ULONG reqAddr = hostAddr.s_addr;
+    u_short reqPort = htons(port);
+
+    int bytes = recvfrom(sock, (char*)(rh), sizeof(ReceiverHeader), 0, (sockaddr*)&respAddr, &resplen);
+    if (bytes == SOCKET_ERROR) {
+        //printf("failed with %d on recv\n", WSAGetLastError());
+        return FAILED_RECV;
+    }
+
+    if (bytes == 0) {
+        printf("empty response\n");
+        return FAILED_RECV;
     }
 
     return STATUS_OK;
