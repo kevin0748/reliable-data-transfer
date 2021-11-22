@@ -102,6 +102,8 @@ int SenderSocket::Open(const char* _targetHost, int _port, int senderWindow, Lin
     estRTT = 0;
     devRTT = 0;
     retxCnt = 0;
+    dupAckCnt = 0;
+    fastReTxCnt = 0;
     timeoutCnt = 0;
 
     // Initial semaphore
@@ -230,7 +232,7 @@ void SenderSocket::Stats() {
                 (double)senderBase * (MAX_PKT_SIZE - sizeof(SenderDataHeader)) / 1e6,
                 nextToSend, // n
                 timeoutCnt, // T
-                0, //F
+                fastReTxCnt, //F
                 effectiveWin, // W
                 (double)(senderBase-prevBase) * 8 * (MAX_PKT_SIZE - sizeof(SenderDataHeader)) / 1e6 / ((cur-prev)/CLOCKS_PER_SEC), // Speed
                 estRTT
@@ -279,7 +281,6 @@ void SenderSocket::WorkerRun() {
             }
             retxCnt++;
             timeoutCnt++;
-           
 
             pending_pkts[senderBase % W].txTime = clock();
             break;
@@ -324,6 +325,7 @@ void SenderSocket::WorkerRun() {
                     rto = estRTT + 4 * max(devRTT, 0.010);
                 }
                 retxCnt = 0;     
+                dupAckCnt = 0;
 
                 senderBase = rh.ackSeq;
                 effectiveWin = min(W, rh.recvWnd);
@@ -334,6 +336,22 @@ void SenderSocket::WorkerRun() {
                 }
                 lastReleased += newReleased;
             }
+            else if (y == senderBase) {
+                dupAckCnt++;
+                if (dupAckCnt == FAST_RETX_THRESHOLD) {
+                    // retransmit
+                    ret2 = send(pending_pkts[senderBase % W].pkt, pending_pkts[senderBase % W].size);
+                    if (ret2 != STATUS_OK) {
+                        printf("Failed to send (%d)\n", ret2);
+                        finished = true;
+                        continue;
+                    }
+                    fastReTxCnt++;
+                    pending_pkts[senderBase % W].txTime = clock();
+                }
+
+            }
+
             break;
 
         case WAIT_OBJECT_0 + 1: // sender

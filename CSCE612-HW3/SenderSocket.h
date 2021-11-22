@@ -21,6 +21,8 @@
 
 #define MAGIC_PROTOCOL 0x8311AA
 
+#define FAST_RETX_THRESHOLD 3
+
 #pragma pack(push,1)  // sets struct padding/alignment to 1 byte
 class Flags {
 public:
@@ -117,6 +119,8 @@ public:
 	int newReleased;
 	DWORD effectiveWin;
 	int retxCnt;
+	int dupAckCnt;
+	int fastReTxCnt;
 	int timeoutCnt;
 
 	double estRTT;
