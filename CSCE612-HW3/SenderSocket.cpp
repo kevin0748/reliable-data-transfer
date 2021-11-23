@@ -346,10 +346,10 @@ void SenderSocket::WorkerRun() {
                         finished = true;
                         continue;
                     }
+                    retxCnt++;
                     fastReTxCnt++;
                     pending_pkts[senderBase % W].txTime = clock();
                 }
-
             }
 
             break;
@@ -423,12 +423,15 @@ int SenderSocket::Send(char* buf, int bufSize) {
 
         if (!ReleaseSemaphore(full, 1, NULL)) {
             printf("ReleaseSemaphore 'full' error\n");
+            return FAILED_INTERNAL_HANDLE;
         }
         break;
     default:
         printf("[Worker Run] failed wait\n");
         break;
     }
+
+    return STATUS_OK;
 }
 
 int SenderSocket::Close() {
