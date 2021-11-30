@@ -59,7 +59,8 @@ int main(int argc, char *argv[])
         int bytes = min(byteBufferSize - off, MAX_PKT_SIZE - sizeof(SenderDataHeader));
         // send chunk into socket
         if ((status = ss.Send(charBuf + off, bytes)) != STATUS_OK) {
-            // error handling: print status and quit
+            printf("Main:\send failed with status %d\n", status);
+            return -1;
         }
         off += bytes;
     }
@@ -69,7 +70,7 @@ int main(int argc, char *argv[])
     LeaveCriticalSection(&ss.queueMutex);
 
     if ((status = ss.Close()) != STATUS_OK) {
-        printf("Main:\tconnected failed with status %d\n", status);
+        printf("Main:\tclose failed with status %d\n", status);
         return -1;
     }
 
@@ -78,7 +79,6 @@ int main(int argc, char *argv[])
     Checksum cs;
     DWORD check = cs.CRC32((unsigned char*)charBuf, byteBufferSize);
 
-    // TODO: fix the timer
     printf("Main:\ttransfer finished in %.3f sec, %.2f Kbps, checksum %0X\n", 
         elapsedTime,
         (double)byteBufferSize * 8/elapsedTime/1000,

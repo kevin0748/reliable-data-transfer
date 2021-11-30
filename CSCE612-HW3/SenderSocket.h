@@ -2,8 +2,8 @@
 #define MAGIC_PORT    22345    // receiver listens on this port
 #define MAX_PKT_SIZE (1500-28) // maximum UDP packet size accepted by receiver
 
-#define MAX_SYN_ATTEMPTS 3
-#define MAX_ATTEMPTS 5
+#define MAX_SYN_ATTEMPTS 50
+#define MAX_ATTEMPTS 50
 
 // possible status codes from ss.Open, ss.Send, ss.Close
 #define STATUS_OK 0 // no error
@@ -20,6 +20,8 @@
 #define RETURN_PATH 1
 
 #define MAGIC_PROTOCOL 0x8311AA
+
+#define FAST_RETX_THRESHOLD 3
 
 #pragma pack(push,1)  // sets struct padding/alignment to 1 byte
 class Flags {
@@ -117,6 +119,8 @@ public:
 	int newReleased;
 	DWORD effectiveWin;
 	int retxCnt;
+	int dupAckCnt;
+	int fastReTxCnt;
 	int timeoutCnt;
 
 	double estRTT;
@@ -148,6 +152,7 @@ public:
 private:
 	int send(const char* msg, int msgLen);
 	int recv(long timeout_sec, long timeout_usec, ReceiverHeader* rh);
+	int recvWOTimeout(ReceiverHeader* rh);
 	int dnsLookup(const char* host);
 };
 

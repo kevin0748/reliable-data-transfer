@@ -102,6 +102,8 @@ int SenderSocket::Open(const char* _targetHost, int _port, int senderWindow, Lin
     estRTT = 0;
     devRTT = 0;
     retxCnt = 0;
+    dupAckCnt = 0;
+    fastReTxCnt = 0;
     timeoutCnt = 0;
 
     // Initial semaphore
@@ -230,7 +232,7 @@ void SenderSocket::Stats() {
                 (double)senderBase * (MAX_PKT_SIZE - sizeof(SenderDataHeader)) / 1e6,
                 nextToSend, // n
                 timeoutCnt, // T
-                0, //F
+                fastReTxCnt, //F
                 effectiveWin, // W
                 (double)(senderBase-prevBase) * 8 * (MAX_PKT_SIZE - sizeof(SenderDataHeader)) / 1e6 / ((cur-prev)/CLOCKS_PER_SEC), // Speed
                 estRTT
@@ -263,27 +265,33 @@ void SenderSocket::WorkerRun() {
             EnterCriticalSection(&queueMutex);
             finished = sentDone && (queueSize == 0);
             LeaveCriticalSection(&queueMutex);
-            if (finished) break;
+            if (finished) continue;
+
+            if (retxCnt > MAX_ATTEMPTS) {
+                finished = true;
+                continue;
+            }
 
             // retransmit
             ret2 = send(pending_pkts[senderBase % W].pkt, pending_pkts[senderBase % W].size);
             if (ret2 != STATUS_OK) {
                 printf("Failed to send (%d)\n", ret2);
-                return;
+                finished = true;
+                continue;
             }
             retxCnt++;
             timeoutCnt++;
-           
 
             pending_pkts[senderBase % W].txTime = clock();
             break;
 
         case WAIT_OBJECT_0: // socket
-            ret2 = recv(floor(rto), (rto - floor(rto)) * 1e6, &rh);
+            ret2 = recvWOTimeout(&rh);
             if (ret2 != STATUS_OK) {
-                if (ret2 == TIMEOUT) continue;
-                else return;
+                finished = true;
+                continue;
             }
+
             if (!isACK(rh.flags)) {
                 continue;
             }
@@ -317,6 +325,7 @@ void SenderSocket::WorkerRun() {
                     rto = estRTT + 4 * max(devRTT, 0.010);
                 }
                 retxCnt = 0;     
+                dupAckCnt = 0;
 
                 senderBase = rh.ackSeq;
                 effectiveWin = min(W, rh.recvWnd);
@@ -327,13 +336,30 @@ void SenderSocket::WorkerRun() {
                 }
                 lastReleased += newReleased;
             }
+            else if (y == senderBase) {
+                dupAckCnt++;
+                if (dupAckCnt == FAST_RETX_THRESHOLD) {
+                    // retransmit
+                    ret2 = send(pending_pkts[senderBase % W].pkt, pending_pkts[senderBase % W].size);
+                    if (ret2 != STATUS_OK) {
+                        printf("Failed to send (%d)\n", ret2);
+                        finished = true;
+                        continue;
+                    }
+                    retxCnt++;
+                    fastReTxCnt++;
+                    pending_pkts[senderBase % W].txTime = clock();
+                }
+            }
+
             break;
 
         case WAIT_OBJECT_0 + 1: // sender
             ret2 = send(pending_pkts[nextToSend % W].pkt, pending_pkts[nextToSend % W].size);
             if (ret2 != STATUS_OK) {
                 printf("Failed to send (%d)\n", ret2);
-                return;
+                finished = true;
+                continue;
             }
 
             if (nextToSend == 0) {
@@ -372,7 +398,7 @@ int SenderSocket::Send(char* buf, int bufSize) {
     int ret = WaitForMultipleObjects(2, events, false, INFINITE);
     switch (ret) {
     case WAIT_OBJECT_0: // eventQuit
-        printf("eventQuit\n");
+        // printf("eventQuit\n");
         break;
 
     case WAIT_OBJECT_0 + 1: // empty
@@ -397,12 +423,15 @@ int SenderSocket::Send(char* buf, int bufSize) {
 
         if (!ReleaseSemaphore(full, 1, NULL)) {
             printf("ReleaseSemaphore 'full' error\n");
+            return FAILED_INTERNAL_HANDLE;
         }
         break;
     default:
         printf("[Worker Run] failed wait\n");
         break;
     }
+
+    return STATUS_OK;
 }
 
 int SenderSocket::Close() {
@@ -497,6 +526,28 @@ int SenderSocket::send(const char* msg, int msgLen) {
     remote.sin_port = htons(port);
     if (sendto(sock, msg, msgLen, 0, (struct sockaddr*)&remote, sizeof(remote)) == SOCKET_ERROR) {
         return FAILED_SEND;
+    }
+
+    return STATUS_OK;
+}
+
+int SenderSocket::recvWOTimeout(ReceiverHeader* rh) {
+    struct sockaddr_in respAddr;
+    memset(&respAddr, 0, sizeof(respAddr));
+    int resplen = sizeof(respAddr);
+
+    ULONG reqAddr = hostAddr.s_addr;
+    u_short reqPort = htons(port);
+
+    int bytes = recvfrom(sock, (char*)(rh), sizeof(ReceiverHeader), 0, (sockaddr*)&respAddr, &resplen);
+    if (bytes == SOCKET_ERROR) {
+        //printf("failed with %d on recv\n", WSAGetLastError());
+        return FAILED_RECV;
+    }
+
+    if (bytes == 0) {
+        printf("empty response\n");
+        return FAILED_RECV;
     }
 
     return STATUS_OK;
