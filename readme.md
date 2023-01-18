@@ -1,5 +1,12 @@
 # Reliable Data Transfer
 
+A Layer 4 Transport Layer sender sockets serving in parallel with customized sender window size and buffer size. Implement flow control to avoid data loss. Mimic rount trip time, forward loss rate and return loss rate in real life. Serve maximum goodput speed to 800 Mbps.
+
+## Usage
+```
+rdt.exe $host $buffer_size $sender_window $rtt $forward_loss_rate $return_loss_rate $speed
+```
+
 ## Example
 ```
 Main:   sender W = 12000, RTT 0.010 sec, loss 0.0001 / 0, link 1000 Mbps
